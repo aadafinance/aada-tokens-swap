@@ -41,16 +41,18 @@ data ContractInfo = ContractInfo
     , newAadaPolicyID        :: !CurrencySymbol
     , aadaBurnScAddrH        :: !ValidatorHash
     , aadaEmergencyScAddrH   :: !ValidatorHash
-    , tokenName              :: !TokenName
+    , oldTokenName           :: !TokenName
+    , newTokenName           :: !TokenName
     } deriving Show
 
 contractInfo = ContractInfo
     { secretHash             = "23b2dc8595610221997288830831937455a3fe5fab6ce823a3a01252a9410d32"
-    , oldAadaPolicyID        = "ff"
-    , newAadaPolicyID        = "ff"
-    , aadaBurnScAddrH        = "e8e5f8aa6b99363f39a7d8883652e257be3a7311c908da9ab8116bb5"
+    , oldAadaPolicyID        = "2b16738ac8f9cd2f0c30c8c1aef9d429ae02f5300734a902c730bb97" --CONY
+    , newAadaPolicyID        = "17830caa477d5eac7a4b6c123d98fa232e6e921368b01b7cd0bdfce6" --AADA
+    , aadaBurnScAddrH        = "c0c671fba483641a71bb92d3a8b7c52c90bf1c01e2b83116ad7d4536"
     , aadaEmergencyScAddrH   = "e8e5f8aa6b99363f39a7d8883652e257be3a7311c908da9ab8116bb5"
-    , tokenName              = "AADA"
+    , oldTokenName           = "CONY"
+    , newTokenName           = "AADA"
     }
 
 {-# INLINABLE mkValidator #-}
@@ -91,20 +93,20 @@ mkValidator contractInfo@ContractInfo{..} _ _ ctx =
     aadaFilter :: CurrencySymbol -> TxOut  -> Bool
     aadaFilter cs tx = any (isSamePolicyAada cs) (symbols $ txOutValue tx) 
 
-    txOutToValueOfPolicy :: CurrencySymbol -> TxOut -> Integer
-    txOutToValueOfPolicy cs tx = valueOf (txOutValue tx) cs tokenName
+    txOutToValueOfPolicy :: CurrencySymbol -> TokenName -> TxOut -> Integer
+    txOutToValueOfPolicy cs tn tx = valueOf (txOutValue tx) cs tn 
 
-    aadaTotalAmount :: [TxOut] -> CurrencySymbol -> Integer
-    aadaTotalAmount txs policy = sum (map (txOutToValueOfPolicy policy) txs)
+    aadaTotalAmount :: [TxOut] -> CurrencySymbol -> TokenName -> Integer
+    aadaTotalAmount txs policy tn = sum (map (txOutToValueOfPolicy policy tn) txs)
 
     oldAada :: Integer
-    oldAada = aadaTotalAmount txOuts oldAadaPolicyID
+    oldAada = aadaTotalAmount txOuts oldAadaPolicyID oldTokenName
 
     newAada :: Integer
-    newAada = aadaTotalAmount txOuts newAadaPolicyID
+    newAada = aadaTotalAmount txOuts newAadaPolicyID newTokenName
 
     checkAmounts :: Bool
-    checkAmounts = oldAada == newAada * 1000000    
+    checkAmounts = oldAada == newAada * 10 -- TODO fix exchange rate
 
     signedByPkh :: TxOut -> Bool
     signedByPkh tx = case toPubKeyHash $ txOutAddress tx of
@@ -119,7 +121,7 @@ mkValidator contractInfo@ContractInfo{..} _ _ ctx =
       if aadaFilter oldAadaPolicyID tx 
         then
 	  case toValidatorHash $ txOutAddress tx of
-            Just    valh -> valh == aadaBurnScAddrH || valh == ownHash
+            Just    valh -> valh == aadaBurnScAddrH || valh == ownHash ctx
             Nothing      -> False
         else
 	    True
