@@ -34,7 +34,6 @@ import           Prelude              (IO, Semigroup (..), Show (..), String)
 
 import           Ledger.Typed.Scripts as Scripts
 
-
 data ContractInfo = ContractInfo
     { secretHash             :: !DatumHash
     , oldAadaPolicyID        :: !CurrencySymbol	
@@ -43,6 +42,7 @@ data ContractInfo = ContractInfo
     , aadaEmergencyScAddrH   :: !ValidatorHash
     , oldTokenName           :: !TokenName
     , newTokenName           :: !TokenName
+    , aadaPkh                :: !PubKeyHas
     } deriving Show
 
 contractInfo = ContractInfo
@@ -53,18 +53,17 @@ contractInfo = ContractInfo
     , aadaEmergencyScAddrH   = "e8e5f8aa6b99363f39a7d8883652e257be3a7311c908da9ab8116bb5"
     , oldTokenName           = "CONY"
     , newTokenName           = "AADA"
+    , aadaPkh                = "ff"
     }
 
 {-# INLINABLE mkValidator #-}
-mkValidator :: ContractInfo -> () -> () -> ScriptContext -> Bool
+mkValidator :: ContractInfo -> ExchangeDatum -> () -> ScriptContext -> Bool
 mkValidator contractInfo@ContractInfo{..} _ _ ctx = 
     if isItEmergencyUnlock then traceIfFalse "Wrong emergency claim address" checkAadaOutEmergencyAddr
     else
-     traceIfFalse "Funds are not being unlocked to address owner funds were locked from"  checkSrcDst  &&
-     traceIfFalse "Invalid tokens exchange amount"                                        checkAmounts &&
-     traceIfFalse "Old tokens are not being sent to burn sc"                              checkBurn
-  where
+     checkIfTxFromAada
 
+  where
     info :: TxInfo
     info = scriptContextTxInfo ctx
 
@@ -86,6 +85,11 @@ mkValidator contractInfo@ContractInfo{..} _ _ ctx =
 
     checkAadaOutEmergencyAddr :: Bool
     checkAadaOutEmergencyAddr = any isTxToAadaEmergency txOuts
+    
+    checkIfTxFromAada :: Bool
+    checkIfTxFromAada = 
+      traceIfFalse "Old tokens are not being sent to burn sc"                              checkBurn             &&
+      traceIfFalse "AADA is sent somewhere else besides AadaExchangeSc or the signer addr" checkSrcDst
 
     isSamePolicyAada :: CurrencySymbol -> CurrencySymbol -> Bool
     isSamePolicyAada cs cs' = cs == cs'
@@ -102,16 +106,15 @@ mkValidator contractInfo@ContractInfo{..} _ _ ctx =
     oldAada :: Integer
     oldAada = aadaTotalAmount txOuts oldAadaPolicyID oldTokenName
 
-    newAada :: Integer
-    newAada = aadaTotalAmount txOuts newAadaPolicyID newTokenName
-
-    checkAmounts :: Bool
-    checkAmounts = oldAada == newAada * 10 -- TODO fix exchange rate
+    checkAmounts :: Integer -> Bool
+    checkAmounts newAada = oldAada == newAada * 10 -- newAADA will be much more, only check txs which go to ????
 
     signedByPkh :: TxOut -> Bool
     signedByPkh tx = case toPubKeyHash $ txOutAddress tx of
-      Just    pkh -> txSignedBy info pkh
-      Nothing     -> False
+      Just    pkh -> (txSignedBy info pkh && checkAmounts (txOutToValueOfPolicy newAadaPolicyID newTokenName tx)) || txSignedBy info aadaPkh
+      Nothing     -> case toValidatorHash $ txOutAddress tx of
+                     Just    vh -> vh == aadaPkh
+		     Nothing    -> False
 
     checkSrcDst :: Bool
     checkSrcDst = all signedByPkh (filter (aadaFilter newAadaPolicyID) txOuts)
