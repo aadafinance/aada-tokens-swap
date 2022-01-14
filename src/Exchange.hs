@@ -88,8 +88,9 @@ mkValidator contractInfo@ContractInfo{..} _ _ ctx =
     
     checkIfTxFromAada :: Bool
     checkIfTxFromAada = 
-      traceIfFalse "Old tokens are not being sent to burn sc"                              checkBurn             &&
-      traceIfFalse "AADA is sent somewhere else besides AadaExchangeSc or the signer addr" checkSrcDst
+      traceIfFalse "Old tokens are not being sent to burn sc"                                  checkBurn   &&
+      traceIfFalse "New aada amount exchange rate is bad or new aada is sent to wrong address" checkSrcDst &&
+      traceIfFalse "New aada change wasn't sent back to SC"                                    checkChange
 
     isSamePolicyAada :: CurrencySymbol -> CurrencySymbol -> Bool
     isSamePolicyAada cs cs' = cs == cs'
@@ -103,34 +104,44 @@ mkValidator contractInfo@ContractInfo{..} _ _ ctx =
     aadaTotalAmount :: [TxOut] -> CurrencySymbol -> TokenName -> Integer
     aadaTotalAmount txs policy tn = sum (map (txOutToValueOfPolicy policy tn) txs)
 
-    oldAada :: Integer
-    oldAada = aadaTotalAmount txOuts oldAadaPolicyID oldTokenName
+    oldAadaTotal :: Integer
+    oldAadaTotal = aadaTotalAmount txOuts oldAadaPolicyID oldTokenName
 
-    checkAmounts :: Integer -> Bool
-    checkAmounts newAada = oldAada == newAada * 10 -- newAADA will be much more, only check txs which go to ????
+    -- change rate from 10 to 1000000 on mainnet
+    sameAmounts :: Integer -> CurrencySymbol -> TokenName -> TxOut -> Bool
+    sameAmounts oldAadaAmount cs tn tx = oldAadaAmount == 10 * txOutToValueOfPolicy cs tn tx 
 
-    signedByPkh :: TxOut -> Bool
-    signedByPkh tx = case toPubKeyHash $ txOutAddress tx of
-      Just    pkh -> (txSignedBy info pkh && checkAmounts (txOutToValueOfPolicy newAadaPolicyID newTokenName tx)) || txSignedBy info aadaPkh
-      Nothing     -> case toValidatorHash $ txOutAddress tx of
-                     Just    vh -> vh == aadaPkh
-		     Nothing    -> False
+    findNewAadaTx :: Integer -> Maybe TxOut
+    findNewAadaTx i = find (sameAmounts oldAadaTotal newAadaPolicyID newTokenName) txOuts
+
+    txSignedByReceiver :: TxOut -> Bool
+    txSignedByReceiver tx = case toPubKeyHash $ txOutAddress tx of
+      Just pkh -> txSignedBy info pkh
+      Nothing  -> False
 
     checkSrcDst :: Bool
-    checkSrcDst = all signedByPkh (filter (aadaFilter newAadaPolicyID) txOuts)
+    checkSrcDst = case findNewAadaTx of 
+       Just tx -> txSignedByReceiver tx || txSignedBy info aadaPkh 
+       Nothing -> False
 
     isOldAadaToBeBurnt :: TxOut -> Bool
     isOldAadaToBeBurnt tx =
       if aadaFilter oldAadaPolicyID tx 
         then
 	  case toValidatorHash $ txOutAddress tx of
-            Just    valh -> valh == aadaBurnScAddrH || valh == ownHash ctx
+            Just    valh -> valh == aadaBurnScAddrH -- || valh == ownHash ctx
             Nothing      -> False
         else
 	    True
 
     checkBurn :: Bool
     checkBurn = all isOldAadaToBeBurnt txOuts
+
+    checkChange :: Bool
+    -- TODO
+    -- the rest of first filter must be filtered yet again by txSignedByReceiver
+    -- then check if all of the remaining transactions go back to this same smartcontract
+    checkChange = $ filter (aadaFilter newAadaPolicyID) txOuts
 
 {-
 data Exchange
