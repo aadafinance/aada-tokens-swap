@@ -7,8 +7,6 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
--- This example is taken directly from cardano-api, written by Jordan Millar, IOHK
-
 module BurnSc
   ( burnSc
   , burnScShortBs
