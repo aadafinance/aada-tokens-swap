@@ -31,6 +31,10 @@ import           Prelude              (IO, Semigroup (..), Show (..), String)
 
 import           Ledger.Typed.Scripts as Scripts
 
+data ExchangeRedeemer = ExchangeRedeemer
+    { beneficiary :: !PubKeyHash
+    }
+
 data ContractInfo = ContractInfo
     { secretHash             :: !DatumHash
     , oldAadaPolicyID        :: !CurrencySymbol
@@ -39,7 +43,6 @@ data ContractInfo = ContractInfo
     , aadaEmergencyScAddrH   :: !ValidatorHash
     , oldTokenName           :: !TokenName
     , newTokenName           :: !TokenName
-    , aadaPkh                :: !PubKeyHash
     } deriving Show
 
 contractInfo = ContractInfo
@@ -50,15 +53,14 @@ contractInfo = ContractInfo
     , aadaEmergencyScAddrH   = "a87652f3ace13f0109e01c6d035a9d2d07e1c24f9d421169cffe54a7"
     , oldTokenName           = "AADA"
     , newTokenName           = "AADA"
-    , aadaPkh                = "9e88ebcc7f4dcabf3333e88f4e863b3981d4df91cee5e8f254125d03"
     }
 
 {-# INLINABLE mkValidator #-}
-mkValidator :: ContractInfo -> Integer -> Integer -> ScriptContext -> Bool
-mkValidator contractInfo@ContractInfo{..} _ _ ctx = 
+mkValidator :: ContractInfo -> Integer -> ExchangeRedeemer -> ScriptContext -> Bool
+mkValidator contractInfo@ContractInfo{..} _ rdm ctx = 
     if isItEmergencyUnlock then traceIfFalse "Wrong emergency claim address" checkAadaOutEmergencyAddr
     else
-     checkIfTxFromAada
+     checkConditions
 
   where
     info :: TxInfo
@@ -83,8 +85,8 @@ mkValidator contractInfo@ContractInfo{..} _ _ ctx =
     checkAadaOutEmergencyAddr :: Bool
     checkAadaOutEmergencyAddr = any isTxToAadaEmergency txOuts
 
-    checkIfTxFromAada :: Bool
-    checkIfTxFromAada = 
+    checkConditions :: Bool
+    checkConditions = 
       traceIfFalse "Old tokens are not being sent to burn sc"                                  checkBurn   &&
       traceIfFalse "New aada amount exchange rate is bad or new aada is sent to wrong address" checkSrcDst &&
       traceIfFalse "New aada change wasn't sent back to SC"                                    checkChange
@@ -105,19 +107,19 @@ mkValidator contractInfo@ContractInfo{..} _ _ ctx =
     oldAadaTotal = aadaTotalAmount txOuts oldAadaPolicyID oldTokenName
 
     sameAmounts :: Integer -> CurrencySymbol -> TokenName -> TxOut -> Bool
-    sameAmounts oldAadaAmount cs tn tx = oldAadaAmount * 1000000 == txOutToValueOfPolicy cs tn tx
+    sameAmounts oldAadaAmount cs tn tx = oldAadaAmount * 10 == txOutToValueOfPolicy cs tn tx
 
     findNewAadaTx :: Maybe TxOut
     findNewAadaTx = find (sameAmounts oldAadaTotal newAadaPolicyID newTokenName) txOuts
 
-    txSignedByReceiver :: TxOut -> Bool
-    txSignedByReceiver tx = case toPubKeyHash $ txOutAddress tx of
-      Just pkh -> traceIfFalse "txSignedBy info pkh is false" (txSignedBy info pkh) || traceIfFalse "txSignedBy info aadaPkh is false" (txSignedBy info aadaPkh)
+    txGoingToBeneficiary :: TxOut -> Bool
+    txGoingToBeneficiary tx = case toPubKeyHash $ txOutAddress tx of
+      Just pkh -> traceIfFalse "wrong beneficiary provided in redeemer" (beneficiary rdm == pkh)
       Nothing  -> traceIfFalse "tx is not signed by receiver or aadaPkh" False
 
     checkSrcDst :: Bool
     checkSrcDst = case findNewAadaTx of 
-       Just tx -> traceIfFalse "Found transaction but tx is not signed by receiver" (txSignedByReceiver tx)
+       Just tx -> traceIfFalse "Found transaction but tx is not signed by receiver" (txGoingToBeneficiary tx)
        Nothing -> traceIfFalse "newAadaTx not found" False
  
     isOldAadaToBeBurnt :: TxOut -> Bool
@@ -147,20 +149,21 @@ mkValidator contractInfo@ContractInfo{..} _ _ ctx =
 data Exchange
 instance Scripts.ValidatorTypes Exchange where
     type instance DatumType Exchange = Integer
-    type instance RedeemerType Exchange = Integer
+    type instance RedeemerType Exchange = ExchangeRedeemer
 
 typedValidator :: Scripts.TypedValidator Exchange
 typedValidator = Scripts.mkTypedValidator @Exchange
     ($$(PlutusTx.compile [|| mkValidator ||]) `PlutusTx.applyCode` PlutusTx.liftCode contractInfo)
      $$(PlutusTx.compile [|| wrap ||])
   where
-    wrap = Scripts.wrapValidator @Integer @Integer
+    wrap = Scripts.wrapValidator @Integer @ExchangeRedeemer
 
 validator :: Validator
 validator = Scripts.validatorScript  typedValidator
 
 PlutusTx.makeIsDataIndexed ''ContractInfo [('ContractInfo, 1)]
 PlutusTx.makeLift ''ContractInfo
+PlutusTx.makeIsDataIndexed ''ExchangeRedeemer [('ExchangeRedeemer, 0)]
 
 script :: Plutus.Script
 script = Plutus.unValidatorScript validator
