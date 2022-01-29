@@ -35,6 +35,10 @@ data ExchangeRedeemer = ExchangeRedeemer
     { beneficiary :: !PubKeyHash
     }
 
+data ExchangeDatum = ExchangeDatum
+    { number :: Integer
+    }
+
 data ContractInfo = ContractInfo
     { secretHash             :: !DatumHash
     , oldAadaPolicyID        :: !CurrencySymbol
@@ -56,7 +60,7 @@ contractInfo = ContractInfo
     }
 
 {-# INLINABLE mkValidator #-}
-mkValidator :: ContractInfo -> Integer -> ExchangeRedeemer -> ScriptContext -> Bool
+mkValidator :: ContractInfo -> ExchangeDatum -> ExchangeRedeemer -> ScriptContext -> Bool
 mkValidator contractInfo@ContractInfo{..} _ rdm ctx = 
     if isItEmergencyUnlock then traceIfFalse "Wrong emergency claim address" checkAadaOutEmergencyAddr
     else
@@ -89,7 +93,8 @@ mkValidator contractInfo@ContractInfo{..} _ rdm ctx =
     checkConditions = 
       traceIfFalse "Old tokens are not being sent to burn sc"                                  checkBurn   &&
       traceIfFalse "New aada amount exchange rate is bad or new aada is sent to wrong address" checkSrcDst &&
-      traceIfFalse "New aada change wasn't sent back to SC"                                    checkChange
+      traceIfFalse "New aada change wasn't sent back to SC"                                    checkChange &&
+      traceIfFalse "Tx going back to sc datum is different"                                    checkDatum 
 
     isSamePolicyAada :: CurrencySymbol -> CurrencySymbol -> Bool
     isSamePolicyAada cs cs' = cs == cs'
@@ -144,11 +149,24 @@ mkValidator contractInfo@ContractInfo{..} _ rdm ctx =
         Nothing   -> False
 
     checkChange :: Bool
-    checkChange = all isTxGoingBack $ filter (isTxRemainingAadaTx) $ filter (aadaFilter newAadaPolicyID) txOuts
+    checkChange = all isTxGoingBack $ filter isTxRemainingAadaTx $ filter (aadaFilter newAadaPolicyID) txOuts
+
+    findTxFromThisSc :: Maybe TxOut
+    findTxFromThisSc = case findOwnInput ctx of
+      Just txInInfo -> Just (txInInfoResolved txInInfo)
+      Nothing       -> Nothing
+
+    isDatumCorrect :: TxOut -> TxOut -> Bool
+    isDatumCorrect ownTx tx = txOutDatumHash ownTx == txOutDatumHash tx
+
+    checkDatum :: Bool
+    checkDatum = case findTxFromThisSc of
+      Just txo -> all (isDatumCorrect txo) $ filter isTxRemainingAadaTx $ filter (aadaFilter newAadaPolicyID) txOuts
+      Nothing  -> traceIfFalse "Tx from this sc was not found" False
 
 data Exchange
 instance Scripts.ValidatorTypes Exchange where
-    type instance DatumType Exchange = Integer
+    type instance DatumType Exchange = ExchangeDatum 
     type instance RedeemerType Exchange = ExchangeRedeemer
 
 typedValidator :: Scripts.TypedValidator Exchange
@@ -156,7 +174,7 @@ typedValidator = Scripts.mkTypedValidator @Exchange
     ($$(PlutusTx.compile [|| mkValidator ||]) `PlutusTx.applyCode` PlutusTx.liftCode contractInfo)
      $$(PlutusTx.compile [|| wrap ||])
   where
-    wrap = Scripts.wrapValidator @Integer @ExchangeRedeemer
+    wrap = Scripts.wrapValidator @ExchangeDatum @ExchangeRedeemer
 
 validator :: Validator
 validator = Scripts.validatorScript  typedValidator
@@ -164,6 +182,7 @@ validator = Scripts.validatorScript  typedValidator
 PlutusTx.makeIsDataIndexed ''ContractInfo [('ContractInfo, 1)]
 PlutusTx.makeLift ''ContractInfo
 PlutusTx.makeIsDataIndexed ''ExchangeRedeemer [('ExchangeRedeemer, 0)]
+PlutusTx.makeIsDataIndexed ''ExchangeDatum [('ExchangeDatum, 0)]
 
 script :: Plutus.Script
 script = Plutus.unValidatorScript validator
