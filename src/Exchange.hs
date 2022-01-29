@@ -112,7 +112,7 @@ mkValidator contractInfo@ContractInfo{..} _ rdm ctx =
     oldAadaTotal = aadaTotalAmount txOuts oldAadaPolicyID oldTokenName
 
     sameAmounts :: Integer -> CurrencySymbol -> TokenName -> TxOut -> Bool
-    sameAmounts oldAadaAmount cs tn tx = oldAadaAmount * 10 == txOutToValueOfPolicy cs tn tx
+    sameAmounts oldAadaAmount cs tn tx = oldAadaAmount * 1000000 == txOutToValueOfPolicy cs tn tx
 
     findNewAadaTx :: Maybe TxOut
     findNewAadaTx = find (sameAmounts oldAadaTotal newAadaPolicyID newTokenName) txOuts
